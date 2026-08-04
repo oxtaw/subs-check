@@ -393,6 +393,75 @@
         .logs-container::-webkit-scrollbar-track { background: transparent; }
         .logs-container::-webkit-scrollbar-thumb { background: #45475a; border-radius: 3px; }
         .logs-container::-webkit-scrollbar-thumb:hover { background: #585b70; }
+
+        /* 订阅链接区域 */
+        .sub-links-card { margin-bottom: 16px; }
+        .sub-link-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .sub-link-item:last-child { border-bottom: none; }
+        .sub-link-label {
+            min-width: 80px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: var(--text-primary);
+        }
+        .sub-link-url {
+            flex: 1;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            background: #f8f9fa;
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sub-link-actions { display: flex; gap: 4px; flex-shrink: 0; }
+        .sub-link-actions .btn { padding: 3px 8px; font-size: 0.75rem; }
+        .qr-popover {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            padding: 16px;
+            text-align: center;
+        }
+        .qr-popover.show { display: block; }
+        .qr-popover canvas { display: block; margin: 0 auto 8px; }
+        .qr-popover .qr-close {
+            position: absolute;
+            top: 6px;
+            right: 10px;
+            cursor: pointer;
+            color: #999;
+            font-size: 18px;
+            line-height: 1;
+        }
+        .qr-popover .qr-close:hover { color: #333; }
+        .toast-msg {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 10000;
+            background: #333;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast-msg.show { opacity: 1; }
     </style>
 </head>
 <body>
@@ -463,6 +532,31 @@
                 </div>
             </div>
         </div>
+
+        <!-- 订阅链接 -->
+        <div class="card sub-links-card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <span><i class="bi bi-link-45deg me-1"></i>订阅链接</span>
+                    <small class="text-muted">点击复制或扫码导入</small>
+                </div>
+            </div>
+            <div class="card-body py-2">
+                <div id="subLinksList">
+                    <div class="text-muted text-center py-2">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- QR码弹窗 -->
+        <div id="qrPopover" class="qr-popover">
+            <span class="qr-close" onclick="closeQr()">&times;</span>
+            <div id="qrCanvas"></div>
+            <small id="qrLabel" class="text-muted"></small>
+        </div>
+
+        <!-- Toast 提示 -->
+        <div id="toastMsg" class="toast-msg"></div>
 
         <!-- 主要内容区域 -->
         <div class="row main-row">
@@ -546,6 +640,9 @@
             </div>
         </div>
     </div>
+
+    <!-- QR Code -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 
     <!-- Bootstrap JS -->
     <script src="/static/bootstrap/bootstrap.bundle.min.js"></script>
@@ -1084,6 +1181,128 @@
         }
 
         getVersionInfo();
+
+        // ========== 订阅链接 ==========
+        function getSubStoreBase() {
+            var origin = window.location.origin;
+            // 默认用同域名+sub-store端口，后续异步获取实际配置覆盖
+            return origin;
+        }
+
+        var subStoreBase = getSubStoreBase();
+
+        const SUB_LINKS = [
+            { label: 'Clash',       icon: 'bi-cloud-download', url: '/download/sub?target=Clash',    sub: true },
+            { label: 'Clash.RIP',   icon: 'bi-cloud-download', url: '/download/sub?target=ClashR',   sub: true },
+            { label: 'V2Ray',       icon: 'bi-cloud-download', url: '/download/sub?target=V2Ray',    sub: true },
+            { label: 'Surge',       icon: 'bi-cloud-download', url: '/download/sub?target=Surge',    sub: true },
+            { label: 'Stash',       icon: 'bi-cloud-download', url: '/download/sub?target=Stash',    sub: true },
+            { label: 'QuantumultX', icon: 'bi-cloud-download', url: '/download/sub?target=QuantumultX', sub: true },
+            { label: 'Surfboard',   icon: 'bi-cloud-download', url: '/download/sub?target=Surfboard', sub: true },
+            { label: 'mihomo.yaml', icon: 'bi-filetype-yml',   url: '/mihomo.yaml',                  sub: false },
+            { label: 'all.yaml',    icon: 'bi-filetype-yml',   url: '/all.yaml',                     sub: false },
+            { label: 'base64.txt',  icon: 'bi-filetype-txt',   url: '/base64.txt',                   sub: false },
+        ];
+
+        function buildSubLinks() {
+            var mainBase = window.location.origin;
+            var list = document.getElementById('subLinksList');
+            list.innerHTML = '';
+            SUB_LINKS.forEach(function(item) {
+                var base = item.sub ? subStoreBase : mainBase;
+                var fullUrl = base + item.url;
+                const row = document.createElement('div');
+                row.className = 'sub-link-item';
+                row.innerHTML =
+                    '<span class="sub-link-label"><i class="bi ' + item.icon + ' me-1"></i>' + item.label + '</span>' +
+                    '<span class="sub-link-url" title="' + fullUrl + '">' + fullUrl + '</span>' +
+                    '<span class="sub-link-actions">' +
+                        '<button class="btn btn-outline-primary btn-sm" onclick="copySubUrl(this)" data-url="' + fullUrl + '" title="复制链接"><i class="bi bi-clipboard"></i></button>' +
+                        '<button class="btn btn-outline-secondary btn-sm" onclick="showQr(this)" data-url="' + fullUrl + '" data-label="' + item.label + '" title="二维码"><i class="bi bi-qr-code"></i></button>' +
+                    '</span>';
+                list.appendChild(row);
+            });
+        }
+
+        function copySubUrl(btn) {
+            const url = btn.getAttribute('data-url');
+            navigator.clipboard.writeText(url).then(function() {
+                const icon = btn.querySelector('i');
+                icon.className = 'bi bi-check-lg';
+                showToast('已复制: ' + url);
+                setTimeout(function() { icon.className = 'bi bi-clipboard'; }, 1500);
+            }).catch(function() {
+                showToast('复制失败，请手动复制');
+            });
+        }
+
+        let currentQr = null;
+        function showQr(btn) {
+            const url = btn.getAttribute('data-url');
+            const label = btn.getAttribute('data-label');
+            const popover = document.getElementById('qrPopover');
+            const canvas = document.getElementById('qrCanvas');
+            const qrLabel = document.getElementById('qrLabel');
+
+            canvas.innerHTML = '';
+            qrLabel.textContent = label;
+
+            try {
+                new QRCode(canvas, {
+                    text: url,
+                    width: 180,
+                    height: 180,
+                    colorDark: '#1a1a2e',
+                    colorLight: '#ffffff',
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+            } catch(e) {
+                canvas.innerHTML = '<div style="width:180px;height:180px;display:flex;align-items:center;justify-content:center;color:#999;">生成失败</div>';
+            }
+
+            const rect = btn.getBoundingClientRect();
+            popover.style.left = Math.min(rect.left, window.innerWidth - 220) + 'px';
+            popover.style.top = (rect.bottom + 8) + 'px';
+            popover.classList.add('show');
+            currentQr = popover;
+        }
+
+        function closeQr() {
+            document.getElementById('qrPopover').classList.remove('show');
+            currentQr = null;
+        }
+
+        document.addEventListener('click', function(e) {
+            if (currentQr && !currentQr.contains(e.target) && !e.target.closest('[onclick*="showQr"]')) {
+                closeQr();
+            }
+        });
+
+        function showToast(msg) {
+            const el = document.getElementById('toastMsg');
+            el.textContent = msg;
+            el.classList.add('show');
+            setTimeout(function() { el.classList.remove('show'); }, 2000);
+        }
+
+        // 初始化订阅链接：先获取 sub-store 信息，再构建链接
+        function initSubLinks() {
+            fetch('/api/sub-store-info', { headers: addApiKeyHeader() })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    var port = data.port || '';
+                    var path = data.path || '';
+                    if (port) {
+                        var host = window.location.hostname;
+                        var proto = window.location.protocol;
+                        subStoreBase = proto + '//' + host + port + path;
+                    }
+                })
+                .catch(function() {})
+                .finally(function() { buildSubLinks(); });
+        }
+
+        initSubLinks();
     </script>
 
 </body>

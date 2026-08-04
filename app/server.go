@@ -92,6 +92,9 @@ func (app *App) initHttpServer() error {
 
 			// 日志相关API
 			api.GET("/logs", app.getLogs)
+
+			// 订阅链接相关API
+			api.GET("/sub-store-info", app.getSubStoreInfo)
 		}
 
 		// 配置页面
@@ -232,6 +235,16 @@ func (app *App) getLogs(c *gin.Context) {
 // getLogs 获取最近日志
 func (app *App) getVersion(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"version": app.version})
+}
+
+// getSubStoreInfo 返回 sub-store 端口和路径信息，供前端构造订阅链接
+func (app *App) getSubStoreInfo(c *gin.Context) {
+	port := config.GlobalConfig.SubStorePort
+	path := config.GlobalConfig.SubStorePath
+	c.JSON(http.StatusOK, gin.H{
+		"port": port,
+		"path": path,
+	})
 }
 
 // ReadLastNLines returns up to n trailing lines of filePath in file order.

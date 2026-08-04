@@ -68,6 +68,6 @@ func FilterResults(results []Result) []Result {
 		}
 	}
 
-	slog.Info(fmt.Sprintf("过滤后节点数量: %d (过滤前: %d)", len(filtered), len(results)))
+	slog.Debug(fmt.Sprintf("过滤后节点数量: %d (过滤前: %d)", len(filtered), len(results)))
 	return filtered
 }

@@ -209,8 +209,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 		Bucket = ratelimit.NewBucketWithRate(float64(math.MaxInt64), int64(math.MaxInt64))
 	}
 
-	slog.Info("开始检测节点")
-	slog.Info("当前参数", "timeout", config.GlobalConfig.Timeout, "enable-speedtest", config.GlobalConfig.SpeedTestUrl != "", "min-speed", config.GlobalConfig.MinSpeed, "download-timeout", config.GlobalConfig.DownloadTimeout, "download-mb", config.GlobalConfig.DownloadMB, "total-speed-limit", config.GlobalConfig.TotalSpeedLimit)
+	slog.Info("开始检测节点", "timeout", config.GlobalConfig.Timeout, "enable-speedtest", config.GlobalConfig.SpeedTestUrl != "", "min-speed", config.GlobalConfig.MinSpeed)
 
 	ResetPhaseResults()
 
@@ -240,9 +239,6 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 
 	// Compile filter patterns once; media workers re-use the slice.
 	patterns := CompileFilterPatterns()
-	if len(patterns) > 0 {
-		slog.Info(fmt.Sprintf("应用节点过滤规则，共 %d 个正则表达式", len(patterns)))
-	}
 
 	// Whole-pipeline cancellation: collector pulls the trigger on SuccessLimit,
 	// RequestCancel pulls it on external SIGHUP / HTTP force-close.
@@ -256,7 +252,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 	collectIn := make(chan pipelineItem, speedConcurrency)
 
 	if config.GlobalConfig.ShuffleTestOrder {
-		slog.Info("已打乱节点测试顺序，输出仍保持订阅原序")
+		slog.Debug("已打乱节点测试顺序，输出仍保持订阅原序")
 	}
 
 	// Dispatcher
@@ -336,13 +332,7 @@ func (pc *ProxyChecker) run(proxies []map[string]any) ([]Result, error) {
 	}
 	Phase.Store(0)
 
-	slog.Info(fmt.Sprintf("存活节点数量: %d", aliveOk))
-	if len(patterns) > 0 {
-		slog.Info(fmt.Sprintf("过滤前节点数量: %d, 过滤后节点数量: %d", mediaDone, filterPassed))
-	} else if hasSpeedTest {
-		slog.Info(fmt.Sprintf("流媒体阶段通过数量: %d", filterPassed))
-	}
-	slog.Info(fmt.Sprintf("可用节点数量: %d", len(pc.results)))
+	slog.Info(fmt.Sprintf("存活节点数量: %d, 可用节点数量: %d", aliveOk, len(pc.results)))
 	slog.Info(fmt.Sprintf("测试总消耗流量: %.3fGB", float64(TotalBytes.Load())/1024/1024/1024))
 
 	pc.checkSubscriptionSuccessRate(proxies)
