@@ -197,6 +197,39 @@ func hasOperatorType(process []map[string]any, typ string) bool {
 	return false
 }
 
+// typeFilterValue 提取 Type Filter 算子的 value 列表。
+func typeFilterValue(process []map[string]any) []string {
+	for _, op := range process {
+		if op["type"] != "Type Filter" {
+			continue
+		}
+		if a, ok := op["args"].(map[string]any); ok {
+			if v, ok := a["value"].([]any); ok {
+				out := make([]string, 0, len(v))
+				for _, x := range v {
+					if s, ok := x.(string); ok {
+						out = append(out, s)
+					}
+				}
+				return out
+			}
+		}
+	}
+	return nil
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestSubStoreCRUD(t *testing.T) {
 	base := startTempSubStore(t)
 
@@ -236,6 +269,34 @@ func TestSubStoreCRUD(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(content), []byte("name: b")) {
 		t.Errorf("updateSub 后 content 未刷新: %q", content)
+	}
+
+	// ---- sub-clash: 创建,应有 Type Filter 算子 ----
+	if err := checkSubClash(); err == nil {
+		t.Fatal("sub-clash 尚未创建,checkSubClash 应该失败")
+	}
+	if err := createSubClash([]byte("proxies:\n  - {name: a}\n")); err != nil {
+		t.Fatalf("createSubClash: %v", err)
+	}
+	subClashURL := base + "/api/sub/" + SubClashName
+	clashProc, _ := getProcess(t, subClashURL)
+	if !hasOperatorType(clashProc, "Type Filter") {
+		t.Errorf("sub-clash 应有 Type Filter 算子, 实际 process=%v", clashProc)
+	}
+	if got, want := typeFilterValue(clashProc), clashLegacyExcludedTypes; !equalStringSlice(got, want) {
+		t.Errorf("Type Filter value=%v, want=%v", got, want)
+	}
+	if !hasOperatorType(clashProc, "Quick Setting Operator") {
+		t.Errorf("sub-clash 应有 Quick Setting Operator, 实际 process=%v", clashProc)
+	}
+
+	// ---- sub-clash: 更新,Type Filter 算子必须保留 ----
+	if err := updateSubClash([]byte("proxies:\n  - {name: b}\n  - {name: c}\n")); err != nil {
+		t.Fatalf("updateSubClash: %v", err)
+	}
+	clashProc, _ = getProcess(t, subClashURL)
+	if !hasOperatorType(clashProc, "Type Filter") {
+		t.Errorf("updateSubClash 不应覆盖 Type Filter 算子, 实际 process=%v", clashProc)
 	}
 
 	// ---- file: 创建,我们的算子应带标记 ----

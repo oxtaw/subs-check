@@ -53,9 +53,11 @@ type Config struct {
 	NotifyTitle          string    `yaml:"notify-title"`
 	SubStorePort         string    `yaml:"sub-store-port"`
 	SubStorePath         string    `yaml:"sub-store-path"`
+	SubStoreHost         string    `yaml:"sub-store-host"`
 	SubStoreSyncCron     string    `yaml:"sub-store-sync-cron"`
 	SubStorePushService  string    `yaml:"sub-store-push-service"`
 	SubStoreProduceCron  string    `yaml:"sub-store-produce-cron"`
+	ClashLegacyFilter    bool      `yaml:"clash-legacy-filter"`
 	MihomoOverwriteUrl   string    `yaml:"mihomo-overwrite-url"`
 	MediaCheck           bool      `yaml:"media-check"`
 	Platforms            []string  `yaml:"platforms"`
@@ -64,6 +66,7 @@ type Config struct {
 	NodeType             []string  `yaml:"node-type"`
 	EnableWebUI          bool      `yaml:"enable-web-ui"`
 	APIKey               string    `yaml:"api-key"`
+	ProtectSubFiles      bool      `yaml:"protect-sub-files"`
 	GithubProxy          string    `yaml:"github-proxy"`
 	Proxy                string    `yaml:"proxy"`
 	CallbackScript       string    `yaml:"callback-script"`
@@ -89,6 +92,8 @@ var GlobalConfig = &Config{
 	MihomoOverwriteUrl: "http://127.0.0.1:8199/sub/ACL4SSR_Online_Full.yaml",
 	MediaCheckTimeout:  10,
 	Platforms:          []string{"openai", "youtube", "netflix", "disney", "gemini", "iprisk"},
+	ProtectSubFiles:    true,
+	ClashLegacyFilter:  true,
 	DownloadMB:         20,
 	AliveTestUrl:       "http://gstatic.com/generate_204",
 	SubUrlsGetUA:       "clash.meta (https://github.com/beck-8/subs-check)",

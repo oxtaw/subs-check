@@ -38,22 +38,7 @@ func (app *App) initHttpServer() error {
 		return fmt.Errorf("获取http监听目录失败: %w", err)
 	}
 
-	// 静态文件路由 - 订阅服务相关，始终启用
-	// 最初不应该不带路径，现在保持兼容
-	router.StaticFile("/all.yaml", saver.OutputPath+"/all.yaml")
-	router.StaticFile("/all.txt", saver.OutputPath+"/all.txt")
-	router.StaticFile("/base64.txt", saver.OutputPath+"/base64.txt")
-	router.StaticFile("/mihomo.yaml", saver.OutputPath+"/mihomo.yaml")
-	router.StaticFile("/ACL4SSR_Online_Full.yaml", saver.OutputPath+"/ACL4SSR_Online_Full.yaml")
-	// CM佬用的布丁狗
-	router.StaticFile("/bdg.yaml", saver.OutputPath+"/bdg.yaml")
-
-	router.Static("/sub/", saver.OutputPath)
-
-	// pprof 路由，空闲时不消耗性能
-	pprof.Register(router)
-
-	// 根据配置决定是否启用Web控制面板
+	// 根据配置决定是否启用Web控制面板，先解析API密钥
 	if config.GlobalConfig.EnableWebUI {
 		if config.GlobalConfig.APIKey == "" {
 			if apiKey := os.Getenv("API_KEY"); apiKey != "" {
@@ -64,6 +49,49 @@ func (app *App) initHttpServer() error {
 			}
 		}
 		slog.Info("启用Web控制面板", "path", "http://ip:port/admin", "api-key", config.GlobalConfig.APIKey)
+	}
+
+	// 订阅文件鉴权中间件：配置了API密钥且开启protect-sub-files时启用
+	// 支持通过请求头 X-API-Key 或 URL 参数 token 传递密钥
+	// 注意：ACL4SSR_Online_Full.yaml 是 sub-store 内部拉取的覆写规则文件，
+	// 不包含节点信息，且默认 mihomo-overwrite-url 依赖它，故保持公开以免破坏 sub-store
+	var subAuth gin.HandlerFunc
+	if config.GlobalConfig.APIKey != "" && config.GlobalConfig.ProtectSubFiles {
+		subAuth = app.authMiddlewareWithToken(config.GlobalConfig.APIKey)
+		slog.Info("订阅文件已启用访问保护", "方式", "请求头 X-API-Key 或 URL 参数 token")
+	}
+
+	// 静态文件路由 - 订阅服务相关，始终启用
+	// 最初不应该不带路径，现在保持兼容
+	registerSubFile := func() {
+		router.StaticFile("/all.yaml", saver.OutputPath+"/all.yaml")
+		router.StaticFile("/all.txt", saver.OutputPath+"/all.txt")
+		router.StaticFile("/base64.txt", saver.OutputPath+"/base64.txt")
+		router.StaticFile("/mihomo.yaml", saver.OutputPath+"/mihomo.yaml")
+		router.StaticFile("/ACL4SSR_Online_Full.yaml", saver.OutputPath+"/ACL4SSR_Online_Full.yaml")
+		// CM佬用的布丁狗
+		router.StaticFile("/bdg.yaml", saver.OutputPath+"/bdg.yaml")
+		router.Static("/sub/", saver.OutputPath)
+	}
+	if subAuth != nil {
+		subGroup := router.Group("/")
+		subGroup.Use(app.subFileAuthMiddleware(config.GlobalConfig.APIKey))
+		subGroup.StaticFile("/all.yaml", saver.OutputPath+"/all.yaml")
+		subGroup.StaticFile("/all.txt", saver.OutputPath+"/all.txt")
+		subGroup.StaticFile("/base64.txt", saver.OutputPath+"/base64.txt")
+		subGroup.StaticFile("/mihomo.yaml", saver.OutputPath+"/mihomo.yaml")
+		subGroup.StaticFile("/ACL4SSR_Online_Full.yaml", saver.OutputPath+"/ACL4SSR_Online_Full.yaml")
+		subGroup.StaticFile("/bdg.yaml", saver.OutputPath+"/bdg.yaml")
+		subGroup.Static("/sub/", saver.OutputPath)
+	} else {
+		registerSubFile()
+	}
+
+	// pprof 路由，空闲时不消耗性能
+	pprof.Register(router)
+
+	// 根据配置决定是否启用Web控制面板
+	if config.GlobalConfig.EnableWebUI {
 
 		// 设置模板加载 - 只有在启用Web控制面板时才加载
 		router.SetHTMLTemplate(template.Must(template.New("").ParseFS(configFS, "templates/*.html")))
@@ -124,6 +152,43 @@ func (app *App) initHttpServer() error {
 func (app *App) authMiddleware(key string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiKey := c.GetHeader("X-API-Key")
+		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(key)) != 1 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效的API密钥"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// authMiddlewareWithToken API认证中间件，支持请求头 X-API-Key 或 URL 参数 token
+// 用于订阅文件等客户端不方便携带请求头的场景
+func (app *App) authMiddlewareWithToken(key string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		apiKey := c.GetHeader("X-API-Key")
+		if apiKey == "" {
+			apiKey = c.Query("token")
+		}
+		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(key)) != 1 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效的API密钥"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// subFileAuthMiddleware 订阅文件鉴权中间件
+// 支持请求头 X-API-Key 或 URL 参数 token 传递密钥
+// ACL4SSR_Online_Full.yaml 为 sub-store 内部使用的覆写规则文件，保持公开
+func (app *App) subFileAuthMiddleware(key string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if strings.HasSuffix(c.Request.URL.Path, "/ACL4SSR_Online_Full.yaml") {
+			c.Next()
+			return
+		}
+		apiKey := c.GetHeader("X-API-Key")
+		if apiKey == "" {
+			apiKey = c.Query("token")
+		}
 		if subtle.ConstantTimeCompare([]byte(apiKey), []byte(key)) != 1 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效的API密钥"})
 			return
@@ -241,9 +306,12 @@ func (app *App) getVersion(c *gin.Context) {
 func (app *App) getSubStoreInfo(c *gin.Context) {
 	port := config.GlobalConfig.SubStorePort
 	path := config.GlobalConfig.SubStorePath
+	host := config.GlobalConfig.SubStoreHost
 	c.JSON(http.StatusOK, gin.H{
-		"port": port,
-		"path": path,
+		"port":        port,
+		"path":        path,
+		"host":        host,
+		"clashLegacy": config.GlobalConfig.ClashLegacyFilter,
 	})
 }
 

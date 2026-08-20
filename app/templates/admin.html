@@ -462,9 +462,66 @@
             pointer-events: none;
         }
         .toast-msg.show { opacity: 1; }
+
+        /* 登录遮罩 */
+        #loginOverlay {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            background: var(--bg-primary);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .login-card {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-md);
+            padding: 32px;
+            width: 380px;
+            max-width: 92vw;
+            text-align: center;
+        }
+        .login-card .login-logo {
+            font-size: 2.2rem;
+            color: var(--accent-blue);
+            margin-bottom: 12px;
+        }
+        .login-card h2 {
+            font-size: 1.35rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .login-card .login-sub {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+        }
+        .login-card .form-control {
+            height: 44px;
+            margin-bottom: 12px;
+        }
+        .login-card .btn {
+            width: 100%;
+            height: 44px;
+        }
     </style>
 </head>
 <body>
+    <!-- 登录遮罩：验证API密钥后才展示订阅链接等敏感内容 -->
+    <div id="loginOverlay">
+        <div class="login-card">
+            <div class="login-logo"><i class="bi bi-speedometer2"></i></div>
+            <h2>Subs Check 配置管理</h2>
+            <div class="login-sub">请输入API密钥后查看订阅链接</div>
+            <input type="password" class="form-control" id="loginKey" placeholder="请输入API密钥" autocomplete="off">
+            <button id="loginBtn" class="btn btn-primary">
+                <i class="bi bi-box-arrow-in-right me-1"></i>登录
+            </button>
+            <div id="loginError" class="text-danger mt-2" style="display:none;font-size:0.85rem;">API密钥无效，请检查后重试</div>
+        </div>
+    </div>
+
     <div class="container-fluid">
         <div class="row align-items-center mb-3">
             <div class="col-md-8 col-sm-12">
@@ -720,6 +777,7 @@
                     loadConfig();
                     loadLogs();
                     updateStatus();
+                    initSubLinks();
                     return true;
                 } else {
                     throw new Error('验证失败');
@@ -739,6 +797,81 @@
         function getApiKey() {
             return localStorage.getItem('apiKey') || '';
         }
+
+        // ========== 登录流程 ==========
+        // 登录成功后隐藏遮罩并加载全部数据（含订阅链接）
+        function unlockApp() {
+            document.getElementById('loginOverlay').style.display = 'none';
+            loadConfig();
+            loadLogs();
+            updateStatus();
+            getVersionInfo();
+            initSubLinks();
+            startPolling();
+        }
+
+        // 校验API密钥并进入面板
+        function doLogin(apiKey) {
+            return fetch('/api/status', {
+                headers: { 'X-API-Key': apiKey }
+            })
+            .then(response => {
+                if (response.status === 401) return false;
+                if (response.ok) return true;
+                throw new Error('验证失败');
+            })
+            .catch(error => {
+                console.error('验证API密钥失败:', error);
+                return false;
+            });
+        }
+
+        const loginKeyInput = document.getElementById('loginKey');
+        const loginBtn = document.getElementById('loginBtn');
+        const loginError = document.getElementById('loginError');
+
+        function showLoginError() {
+            loginError.style.display = 'block';
+            loginKeyInput.focus();
+        }
+
+        loginBtn.addEventListener('click', function() {
+            const apiKey = loginKeyInput.value.trim();
+            if (!apiKey) {
+                showLoginError();
+                return;
+            }
+            loginBtn.disabled = true;
+            doLogin(apiKey).then(ok => {
+                loginBtn.disabled = false;
+                if (ok) {
+                    localStorage.setItem('apiKey', apiKey);
+                    dom.apiKey.value = apiKey;
+                    loginError.style.display = 'none';
+                    unlockApp();
+                } else {
+                    showLoginError();
+                }
+            });
+        });
+
+        loginKeyInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') loginBtn.click();
+        });
+
+        // 页面加载时：若有已保存的密钥则自动校验，否则停留在登录遮罩
+        (function() {
+            const stored = localStorage.getItem('apiKey') || '';
+            dom.apiKey.value = stored;
+            if (stored) {
+                doLogin(stored).then(ok => {
+                    if (ok) unlockApp();
+                    else loginKeyInput.focus();
+                });
+            } else {
+                loginKeyInput.focus();
+            }
+        })();
 
         // 添加API密钥到请求头
         function addApiKeyHeader(headers = {}) {
@@ -1148,21 +1281,6 @@
             });
         }
 
-        // 初始加载
-        updateStatus();
-        loadLogs();
-
-        // 检查API密钥
-        const apiKey = localStorage.getItem('apiKey');
-        if (!apiKey) {
-            alert('请先输入API密钥以使用本系统');
-            dom.apiKey.focus();
-        }
-
-        // 定时刷新
-        setInterval(loadLogs, 10000);
-        setInterval(updateStatus, 3000);
-
         // 获取版本信息
         function getVersionInfo() {
             fetch('/api/version', {
@@ -1180,7 +1298,11 @@
             });
         }
 
-        getVersionInfo();
+        // 登录成功后启动定时刷新
+        function startPolling() {
+            setInterval(loadLogs, 10000);
+            setInterval(updateStatus, 3000);
+        }
 
         // ========== 订阅链接 ==========
         function getSubStoreBase() {
@@ -1190,10 +1312,11 @@
         }
 
         var subStoreBase = getSubStoreBase();
+        var clashLegacyEnabled = false;
 
         const SUB_LINKS = [
             { label: 'Clash',       icon: 'bi-cloud-download', url: '/download/sub?target=Clash',    sub: true },
-            { label: 'Clash.RIP',   icon: 'bi-cloud-download', url: '/download/sub?target=ClashR',   sub: true },
+            { label: 'Clash(旧版)', icon: 'bi-cloud-download', url: '/download/sub-clash?target=Clash', sub: true, clashLegacy: true },
             { label: 'V2Ray',       icon: 'bi-cloud-download', url: '/download/sub?target=V2Ray',    sub: true },
             { label: 'Surge',       icon: 'bi-cloud-download', url: '/download/sub?target=Surge',    sub: true },
             { label: 'Stash',       icon: 'bi-cloud-download', url: '/download/sub?target=Stash',    sub: true },
@@ -1208,9 +1331,16 @@
             var mainBase = window.location.origin;
             var list = document.getElementById('subLinksList');
             list.innerHTML = '';
+            // 自有订阅文件已启用访问保护，拼接 token 以便客户端直接使用
+            var apiKey = getApiKey();
             SUB_LINKS.forEach(function(item) {
+                // Clash(旧版) 仅在 clash-legacy-filter 开启时展示
+                if (item.clashLegacy && !clashLegacyEnabled) return;
                 var base = item.sub ? subStoreBase : mainBase;
                 var fullUrl = base + item.url;
+                if (!item.sub && apiKey) {
+                    fullUrl += (fullUrl.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(apiKey);
+                }
                 const row = document.createElement('div');
                 row.className = 'sub-link-item';
                 row.innerHTML =
@@ -1292,17 +1422,22 @@
                 .then(function(data) {
                     var port = data.port || '';
                     var path = data.path || '';
-                    if (port) {
-                        var host = window.location.hostname;
-                        var proto = window.location.protocol;
+                    var host = data.host || '';
+                    clashLegacyEnabled = !!data.clashLegacy;
+                    var proto = window.location.protocol;
+                    // 配置了 sub-store-host 时用独立域名拼 base(如 sus.example.com)，
+                    // 否则退回面板域名，保持旧行为
+                    if (host) {
                         subStoreBase = proto + '//' + host + port + path;
+                    } else if (port) {
+                        subStoreBase = proto + '//' + window.location.hostname + port + path;
                     }
                 })
                 .catch(function() {})
                 .finally(function() { buildSubLinks(); });
         }
 
-        initSubLinks();
+        // 订阅链接在登录成功后由 unlockApp() 调用 initSubLinks() 构建
     </script>
 
 </body>

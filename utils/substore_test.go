@@ -5,6 +5,42 @@ import (
 	"time"
 )
 
+func TestClashLegacyProcess(t *testing.T) {
+	proc := clashLegacyProcess()
+	if len(proc) != 2 {
+		t.Fatalf("clashLegacyProcess 应有2个算子, 实际 %d", len(proc))
+	}
+	if proc[0].Type != "Type Filter" {
+		t.Fatalf("第一个算子应为 Type Filter, 实际 %q", proc[0].Type)
+	}
+	args, ok := proc[0].Args.(map[string]any)
+	if !ok {
+		t.Fatalf("Type Filter args 应为对象, 实际 %T", proc[0].Args)
+	}
+	if keep, _ := args["keep"].(bool); keep {
+		t.Errorf("Type Filter 应为排除模式(keep=false), 实际 keep=%v", keep)
+	}
+	value, _ := args["value"].([]string)
+	want := []string{"vless", "hysteria", "hysteria2", "hy2", "tuic", "wireguard", "shadowtls", "ssh"}
+	for _, typ := range want {
+		if !containsString(value, typ) {
+			t.Errorf("Type Filter 应排除 %q, 实际 value=%v", typ, value)
+		}
+	}
+	if proc[1].Type != "Quick Setting Operator" {
+		t.Errorf("第二个算子应为 Quick Setting Operator, 实际 %q", proc[1].Type)
+	}
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFormatTimePlaceholders(t *testing.T) {
 	// 基准时间：2023-01-31 12:00:00，便于测试跨月/跨年
 	base := time.Date(2023, 1, 31, 12, 0, 0, 0, time.UTC)

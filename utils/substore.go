@@ -110,12 +110,29 @@ type statusResult struct {
 }
 
 const (
-	SubName    = "sub"
-	MihomoName = "mihomo"
+	SubName      = "sub"
+	SubClashName = "sub-clash"
+	MihomoName   = "mihomo"
 	// 我们覆写算子的识别标记，写在 process item 的 customName 上。
 	// sub-store 处理时只读 type/args/disabled，customName 仅作前端展示，可安全用作标记。
 	overwriteOpMarker = "subs-check专用,勿动"
 )
+
+// clashLegacyExcludedTypes 旧版 Clash(非 Meta 核心)不支持的 meta-only 协议。
+// 生成 sub-clash 订阅时用 Type Filter 算子排除它们；主订阅 sub 保留全部节点。
+var clashLegacyExcludedTypes = []string{"vless", "hysteria", "hysteria2", "hy2", "tuic", "wireguard", "shadowtls", "ssh"}
+
+// clashLegacyProcess 返回 sub-clash 订阅的处理流水线：
+// 先按类型排除 meta-only 协议，再做与主订阅一致的 Quick Setting。
+func clashLegacyProcess() []Operator {
+	return []Operator{
+		{
+			Type: "Type Filter",
+			Args: map[string]any{"value": clashLegacyExcludedTypes, "keep": false},
+		},
+		{Type: "Quick Setting Operator"},
+	}
+}
 
 // 用来判断用户是否在运行时更改了覆写订阅的url
 var mihomoOverwriteUrl string
@@ -159,6 +176,20 @@ func UpdateSubStore(yamlData []byte) {
 		slog.Error(fmt.Sprintf("更新sub配置文件失败: %v", err))
 		return
 	}
+	// 旧版 Clash 兼容订阅：与 sub 内容相同，但用 Type Filter 排除 meta-only 协议
+	if config.GlobalConfig.ClashLegacyFilter {
+		if err := checkSubClash(); err != nil {
+			slog.Debug(fmt.Sprintf("检查sub-clash配置文件失败: %v, 正在创建中...", err))
+			if err := createSubClash(yamlData); err != nil {
+				slog.Error(fmt.Sprintf("创建sub-clash配置文件失败: %v", err))
+				return
+			}
+		}
+		if err := updateSubClash(yamlData); err != nil {
+			slog.Error(fmt.Sprintf("更新sub-clash配置文件失败: %v", err))
+			return
+		}
+	}
 	if config.GlobalConfig.MihomoOverwriteUrl != mihomoOverwriteUrl {
 		if err := updatefile(); err != nil {
 			slog.Error(fmt.Sprintf("更新mihomo配置文件失败: %v", err))
@@ -169,7 +200,13 @@ func UpdateSubStore(yamlData []byte) {
 	slog.Info("substore更新完成")
 }
 func checkSub() error {
-	resp, err := http.Get(fmt.Sprintf("%s/api/sub/%s", BaseURL, SubName))
+	return checkSubByName(SubName)
+}
+func checkSubClash() error {
+	return checkSubByName(SubClashName)
+}
+func checkSubByName(name string) error {
+	resp, err := http.Get(fmt.Sprintf("%s/api/sub/%s", BaseURL, name))
 	if err != nil {
 		return err
 	}
@@ -193,15 +230,19 @@ func checkSub() error {
 	return nil
 }
 func createSub(data []byte) error {
+	return createSubByName(SubName, data, []Operator{{Type: "Quick Setting Operator"}})
+}
+func createSubClash(data []byte) error {
+	return createSubByName(SubClashName, data, clashLegacyProcess())
+}
+func createSubByName(name string, data []byte, process []Operator) error {
 	// sub-store 上传默认限制1MB
 	sub := sub{
 		Content: string(data),
-		Name:    "sub",
+		Name:    name,
 		Remark:  "subs-check专用,勿动",
 		Source:  "local",
-		Process: []Operator{
-			{Type: "Quick Setting Operator"},
-		},
+		Process: process,
 	}
 	json, err := json.Marshal(sub)
 	if err != nil {
@@ -219,6 +260,12 @@ func createSub(data []byte) error {
 }
 
 func updateSub(data []byte) error {
+	return updateSubByName(SubName, data)
+}
+func updateSubClash(data []byte) error {
+	return updateSubByName(SubClashName, data)
+}
+func updateSubByName(name string, data []byte) error {
 	// PATCH 是浅合并 ({...old, ...body})，只发 content 即可刷新节点，
 	// 用户对 sub 的其它改动 (process/remark/tag 等) 都会保留。
 	payload, err := json.Marshal(map[string]string{"content": string(data)})
@@ -226,7 +273,7 @@ func updateSub(data []byte) error {
 		return err
 	}
 	req, err := http.NewRequest(http.MethodPatch,
-		fmt.Sprintf("%s/api/sub/%s", BaseURL, SubName),
+		fmt.Sprintf("%s/api/sub/%s", BaseURL, name),
 		bytes.NewBuffer(payload))
 	if err != nil {
 		return err
