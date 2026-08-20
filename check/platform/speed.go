@@ -39,6 +39,17 @@ func (r *networkLimitedReader) Read(p []byte) (n int, err error) {
 	return r.reader.Read(p)
 }
 
+// 测速提前截止参数：
+// minEarlySample 达到该采样量、且 minEarlyWindow 观察期足够后，
+// 实时速率明显达标/不达标就提前结束，避免所有节点都固定下载满 DownloadMB。
+const (
+	minEarlySample  = 1 * 1024 * 1024
+	earlyCheckBytes = 256 * 1024
+)
+
+// minEarlyWindow 观察期,做成包级变量便于测试缩短。
+var minEarlyWindow = 1500 * time.Millisecond
+
 // CheckSpeed downloads speedTestURL through httpClient and returns the measured
 // throughput. The URL is passed in explicitly (rather than read from
 // config.GlobalConfig) so a run captured at pipeline start stays consistent
@@ -92,12 +103,44 @@ func CheckSpeed(httpClient *http.Client, bucket *ratelimit.Bucket, bytesCounter 
 		limit:        limitSize,
 	}
 
-	// 读取所有数据
-	totalBytes, err := io.Copy(io.Discard, limitedReader)
-	// io.EOF 是正常的（达到限制），其他错误才需要关注
-	if err != nil && err != io.EOF && totalBytes == 0 {
-		slog.Debug(fmt.Sprintf("totalBytes: %d, 读取数据时发生错误: %v", totalBytes, err))
-		return 0, 0, err
+	// 分块读取，周期性做提前截止判定。
+	// 达标(overall >= min-speed)或整体与最近窗口都不达标时提前结束；
+	// 临界节点不提前结束,仍会下载满 DownloadMB 以保证测速准确。
+	minSpeed := config.GlobalConfig.MinSpeed
+	buf := make([]byte, earlyCheckBytes)
+	var totalBytes int64
+	windowBytes := int64(0)
+	lastWindow := time.Now()
+
+	for {
+		n, rerr := limitedReader.Read(buf)
+		if n > 0 {
+			totalBytes += int64(n)
+			windowBytes += int64(n)
+		}
+		now := time.Now()
+		if windowBytes >= earlyCheckBytes || rerr != nil {
+			windowDur := now.Sub(lastWindow)
+			var windowSpeed int
+			if windowDur.Milliseconds() > 0 {
+				windowSpeed = int(float64(windowBytes) / 1024 * 1000 / float64(windowDur.Milliseconds()))
+			}
+			elapsed := now.Sub(startTime)
+			if totalBytes >= minEarlySample && elapsed >= minEarlyWindow {
+				overall := int(float64(totalBytes) / 1024 * 1000 / float64(elapsed.Milliseconds()+1))
+				if overall >= minSpeed {
+					break // 明显达标,提前结束
+				}
+				if windowSpeed < minSpeed {
+					break // 整体与最近窗口均不达标,提前结束
+				}
+			}
+			windowBytes = 0
+			lastWindow = now
+		}
+		if rerr != nil {
+			break
+		}
 	}
 
 	// 计算下载时间（毫秒）

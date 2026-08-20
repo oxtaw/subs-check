@@ -29,6 +29,42 @@ type subEntry struct {
 	source string
 }
 
+// 订阅抓取共享 transport：复用连接池/keep-alive，避免每个订阅(含重试)
+// 都新建 transport 而丢失连接复用。仅当 DNS 路由配置变化时重建。
+var (
+	subTransportMu  sync.Mutex
+	subTransport    *http.Transport
+	subTransportDNS bool
+)
+
+// subTransportFor 返回共享的订阅抓取 transport。
+// useDNS 为 true 时走 mihomo 自定义 DNS 解析,避免订阅域名泄露到系统 DNS。
+func subTransportFor(useDNS bool) *http.Transport {
+	subTransportMu.Lock()
+	defer subTransportMu.Unlock()
+	if subTransport != nil && subTransportDNS == useDNS {
+		return subTransport
+	}
+	t := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	if useDNS {
+		// Route DNS through the configured mihomo resolver so subscription
+		// domains aren't leaked to system DNS.
+		t.DialContext = newMihomoDialer(10 * time.Second)
+	}
+	subTransport = t
+	subTransportDNS = useDNS
+	return t
+}
+
 func GetProxies() ([]map[string]any, error) {
 
 	// 解析本地与远程订阅清单
@@ -257,25 +293,10 @@ func GetDateFromSubs(subUrl string) ([]byte, error) {
 	}
 	var lastErr error
 
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-	// Route DNS through the configured mihomo resolver so subscription domains aren't leaked to system DNS.
-	// Only when user enabled custom DNS — keeps default behavior unchanged for existing users.
-	if config.GlobalConfig.DNS.Enable {
-		transport.DialContext = newMihomoDialer(time.Duration(timeout) * time.Second)
-	}
+	// 复用共享 transport(连接池/keep-alive),每次调用只新建轻量的 http.Client 携带超时
 	client := &http.Client{
 		Timeout:   time.Duration(timeout) * time.Second,
-		Transport: transport,
+		Transport: subTransportFor(config.GlobalConfig.DNS.Enable),
 	}
 
 	for i := range maxRetries {

@@ -7,48 +7,77 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"log/slog"
 
 	"github.com/metacubex/mihomo/common/convert"
 )
 
-type geoResult struct {
-	loc string
-	ip  string
-}
-
 // 这里需要一个不限流的ipv4的非CF的API
 // 因为ipv6在数据库中没有记载时会变成US。
 // 不能用CF的API是因为我们要保留CF的节点（无proxyip的）
-// GetProxyCountry 并行请求所有 IP 查询端点，按优先级返回最优结果
+// GetProxyCountry 并行请求所有 IP 查询端点，先到先得：
+// 最高优先级(GetMe)命中立即返回；低优先级先到时，在宽限期(grace)内
+// 等待更高优先级结果再返回，避免像旧实现那样无谓阻塞到最慢端点。
+// countryGrace 为包级变量便于测试缩短。
+var countryGrace = 300 * time.Millisecond
+
 func GetProxyCountry(httpClient *http.Client) (loc string, ip string) {
 	// 顺序代表优先级，索引越小质量越高
 	checkers := []func(*http.Client) (string, string){
 		GetMe, GetIpinfo, GetCFProxy, GetEdgeOneProxy,
 	}
 
-	results := make([]geoResult, len(checkers))
+	type result struct {
+		idx int
+		loc string
+		ip  string
+	}
+	ch := make(chan result, len(checkers))
 	var wg sync.WaitGroup
-
 	for idx, fn := range checkers {
 		wg.Add(1)
 		go func(i int, f func(*http.Client) (string, string)) {
 			defer wg.Done()
 			l, p := f(httpClient)
-			results[i] = geoResult{l, p}
+			if l != "" && p != "" {
+				ch <- result{i, l, p}
+			}
 		}(idx, fn)
 	}
+	go func() { wg.Wait(); close(ch) }()
 
-	wg.Wait()
-
-	// 按优先级返回第一个成功的结果
-	for _, res := range results {
-		if res.loc != "" && res.ip != "" {
-			return res.loc, res.ip
+	bestIdx := len(checkers)
+	var bestLoc, bestIP string
+	haveResult := false
+	deadline := time.Now().Add(countryGrace)
+	for {
+		if bestIdx == 0 {
+			return bestLoc, bestIP
+		}
+		var timerC <-chan time.Time
+		if haveResult {
+			timerC = time.After(time.Until(deadline))
+		}
+		select {
+		case r, ok := <-ch:
+			if !ok {
+				// 所有端点都已返回且无更高优先级可等
+				return bestLoc, bestIP
+			}
+			if !haveResult {
+				haveResult = true
+				deadline = time.Now().Add(countryGrace)
+			}
+			if r.idx < bestIdx {
+				bestIdx, bestLoc, bestIP = r.idx, r.loc, r.ip
+			}
+		case <-timerC:
+			// 已有低优先级结果且宽限期到，返回当前最优
+			return bestLoc, bestIP
 		}
 	}
-	return
 }
 
 // GetEdgeOneProxy 通过腾讯 EdgeOne 获取地理位置

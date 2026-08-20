@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"log/slog"
 
@@ -120,12 +121,24 @@ func getNeedUpdateNames(client httpClient) ([]string, error) {
 }
 
 func updateSubs(client httpClient, names []string) error {
+	// 并发更新订阅，限制并发数避免打满 mihomo API
+	const maxConcurrent = 5
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
 	for _, name := range names {
-		url := fmt.Sprintf("%s/providers/proxies/%s", config.GlobalConfig.MihomoApiUrl, name)
-		if _, err := makeRequest(client, http.MethodPut, url); err != nil {
-			slog.Error(fmt.Sprintf("更新订阅%v失败: %v", name, err))
-		}
-		slog.Info(fmt.Sprintf("成功更新订阅: %s", name))
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(n string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			url := fmt.Sprintf("%s/providers/proxies/%s", config.GlobalConfig.MihomoApiUrl, n)
+			if _, err := makeRequest(client, http.MethodPut, url); err != nil {
+				slog.Error(fmt.Sprintf("更新订阅%v失败: %v", n, err))
+				return
+			}
+			slog.Info(fmt.Sprintf("成功更新订阅: %s", n))
+		}(name)
 	}
+	wg.Wait()
 	return nil
 }
