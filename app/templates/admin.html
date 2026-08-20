@@ -1426,9 +1426,9 @@
                     clashLegacyEnabled = !!data.clashLegacy;
                     var proto = window.location.protocol;
                     // 配置了 sub-store-host 时用独立域名拼 base(如 sus.example.com)，
-                    // 否则退回面板域名，保持旧行为
+                    // 该域名已由反向代理映射,无需再加端口; 否则退回面板域名+端口
                     if (host) {
-                        subStoreBase = proto + '//' + host + port + path;
+                        subStoreBase = proto + '//' + host + path;
                     } else if (port) {
                         subStoreBase = proto + '//' + window.location.hostname + port + path;
                     }
