@@ -1315,8 +1315,8 @@
         var clashLegacyEnabled = false;
 
         const SUB_LINKS = [
-            { label: 'Clash',       icon: 'bi-cloud-download', url: '/download/sub?target=Clash',    sub: true },
-            { label: 'Clash(旧版)', icon: 'bi-cloud-download', url: '/download/sub-clash?target=Clash', sub: true, clashLegacy: true },
+            { label: 'Clash(Meta)', icon: 'bi-cloud-download', url: '/download/sub?target=Clash',    sub: true },
+            { label: 'Clash(旧版)', icon: 'bi-cloud-download', url: '/download/sub-clash?target=Clash', sub: true, clashLegacy: true, badge: 'vless等不支持' },
             { label: 'V2Ray',       icon: 'bi-cloud-download', url: '/download/sub?target=V2Ray',    sub: true },
             { label: 'Surge',       icon: 'bi-cloud-download', url: '/download/sub?target=Surge',    sub: true },
             { label: 'Stash',       icon: 'bi-cloud-download', url: '/download/sub?target=Stash',    sub: true },
@@ -1341,10 +1341,11 @@
                 if (!item.sub && apiKey) {
                     fullUrl += (fullUrl.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(apiKey);
                 }
+                var badge = item.badge ? '<span class="badge bg-warning text-dark ms-1" title="' + item.badge + '">' + item.badge + '</span>' : '';
                 const row = document.createElement('div');
                 row.className = 'sub-link-item';
                 row.innerHTML =
-                    '<span class="sub-link-label"><i class="bi ' + item.icon + ' me-1"></i>' + item.label + '</span>' +
+                    '<span class="sub-link-label"><i class="bi ' + item.icon + ' me-1"></i>' + item.label + badge + '</span>' +
                     '<span class="sub-link-url" title="' + fullUrl + '">' + fullUrl + '</span>' +
                     '<span class="sub-link-actions">' +
                         '<button class="btn btn-outline-primary btn-sm" onclick="copySubUrl(this)" data-url="' + fullUrl + '" title="复制链接"><i class="bi bi-clipboard"></i></button>' +
